@@ -130,6 +130,7 @@ export const api = {
     }),
 
   modelSpecs: (project_id: string) => request<ModelSpec[]>(`/v1/model-specs?project_id=${project_id}`),
+  allModelSpecs: () => request<ModelSpec[]>("/v1/model-specs"),
   createModelSpec: (project_id: string, channels: ChannelSpec[], controls: string[], engine = "ridge") =>
     request<ModelSpec>("/v1/model-specs", {
       method: "POST",
@@ -137,6 +138,7 @@ export const api = {
     }),
 
   runs: (project_id: string) => request<ModelRun[]>(`/v1/runs?project_id=${project_id}`),
+  allRuns: () => request<ModelRun[]>("/v1/runs"),
   createRun: (spec_id: string, dataset_version_id: string) =>
     request<ModelRun>(`/v1/model-specs/${spec_id}/runs`, {
       method: "POST",

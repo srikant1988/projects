@@ -11,11 +11,12 @@ import {
 } from "../api";
 import TopBar from "../components/TopBar";
 import PipelineRail, { StepDef } from "../components/PipelineRail";
+import AddSourceModal from "../components/AddSourceModal";
 import Phase2 from "./Phase2";
 
-const STEPS: StepDef[] = [
-  { title: "Project setup", subtitle: "Outcome, grain, coverage" },
+export const STEPS: StepDef[] = [
   { title: "Data", subtitle: "Sources, dataset version" },
+  { title: "Project setup", subtitle: "Outcome, grain, coverage" },
   { title: "Model spec", subtitle: "Channels, controls, engine" },
   { title: "Runs", subtitle: "Fit, diagnose, iterate" },
   { title: "Workbook", subtitle: "Validate at lowest grain" },
@@ -138,8 +139,8 @@ export default function ProjectStudio({
   const published = !!champion;
 
   const done = [
-    setupAcked,
     datasetVersions.length > 0,
+    setupAcked,
     specs.length > 0,
     runs.some((r) => r.status === "completed"),
     workbookGenerated,
@@ -165,7 +166,13 @@ export default function ProjectStudio({
       />
       <div className="shell">
         {phase === 1 ? (
-          <PipelineRail steps={STEPS} step={step} done={done} onStep={goStep} published={published} />
+          <PipelineRail
+            steps={[{ title: "My workspace", subtitle: "Choose an engagement" }, ...STEPS]}
+            step={step + 1}
+            done={[true, ...done]}
+            onStep={(i) => (i === 0 ? onBack() : goStep(i - 1))}
+            published={published}
+          />
         ) : (
           <aside className="rail">
             <div className="rail-h">Marketing performance</div>
@@ -187,17 +194,21 @@ export default function ProjectStudio({
               </div>
 
               {step === 0 && (
-                <SetupStep project={project} onContinue={() => { setSetupAcked(true); goStep(1); }} />
-              )}
-              {step === 1 && (
                 <DataStep
                   project={project}
                   sources={sources}
                   datasetVersions={datasetVersions}
                   reload={loadAll}
                   setError={setError}
+                  onBack={onBack}
+                  onContinue={() => goStep(1)}
+                />
+              )}
+              {step === 1 && (
+                <SetupStep
+                  project={project}
                   onBack={() => goStep(0)}
-                  onContinue={() => goStep(2)}
+                  onContinue={() => { setSetupAcked(true); goStep(2); }}
                 />
               )}
               {step === 2 && (
@@ -284,7 +295,15 @@ export default function ProjectStudio({
   );
 }
 
-function SetupStep({ project, onContinue }: { project: Project; onContinue: () => void }) {
+function SetupStep({
+  project,
+  onBack,
+  onContinue,
+}: {
+  project: Project;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
   return (
     <section>
       <div className="head">
@@ -311,7 +330,10 @@ function SetupStep({ project, onContinue }: { project: Project; onContinue: () =
           </p>
         </div>
       </div>
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+        <button className="btn" onClick={onBack}>
+          Back
+        </button>
         <button className="btn pri" onClick={onContinue}>
           Save and continue â†’
         </button>
@@ -337,20 +359,18 @@ function DataStep({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const [srcName, setSrcName] = useState("");
-  const [srcType, setSrcType] = useState("excel");
   const [label, setLabel] = useState("dsv_v1");
   const [channels, setChannels] = useState<ChannelSpec[]>([{ name: "tv", min: 0, max: 10 }]);
   const [controls, setControls] = useState("price_index, seasonality");
+  const [showAddSource, setShowAddSource] = useState(false);
 
-  async function addSource() {
-    if (!srcName.trim()) return;
+  async function addSource(name: string, sourceType: string) {
     try {
-      await api.createDataSource(project.id, srcName.trim(), srcType);
-      setSrcName("");
+      await api.createDataSource(project.id, name, sourceType);
       reload();
     } catch (err: any) {
       setError(err.message);
+      throw err;
     }
   }
 
@@ -385,7 +405,12 @@ function DataStep({
       <div className="card">
         <div className="card-h">
           <h3>Sources</h3>
-          <span className="tag ok">{sources.length} connected</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span className="tag ok">{sources.length} connected</span>
+            <button className="btn sm" onClick={() => setShowAddSource(true)}>
+              Add source
+            </button>
+          </div>
         </div>
         <div className="card-b">
           <div className="scroll">
@@ -419,28 +444,12 @@ function DataStep({
               </tbody>
             </table>
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <input
-              placeholder="Source name"
-              value={srcName}
-              onChange={(e) => setSrcName(e.target.value)}
-              style={{ flex: 1, padding: "6px 9px", border: "1px solid var(--line-hard)", borderRadius: 3 }}
-            />
-            <select
-              value={srcType}
-              onChange={(e) => setSrcType(e.target.value)}
-              style={{ padding: "6px 9px", border: "1px solid var(--line-hard)", borderRadius: 3 }}
-            >
-              <option value="excel">Excel / CSV</option>
-              <option value="database">Database</option>
-              <option value="lake">Data lake / other</option>
-            </select>
-            <button className="btn pri sm" onClick={addSource}>
-              Add source
-            </button>
-          </div>
         </div>
       </div>
+
+      {showAddSource && (
+        <AddSourceModal onClose={() => setShowAddSource(false)} onConnect={addSource} />
+      )}
 
       <div className="card">
         <div className="card-h">
