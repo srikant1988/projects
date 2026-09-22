@@ -12,7 +12,7 @@ import {
 import TopBar from "../components/TopBar";
 import PipelineRail, { StepDef } from "../components/PipelineRail";
 import AddSourceModal from "../components/AddSourceModal";
-import Phase2 from "./Phase2";
+import Phase2, { P2Section } from "./Phase2";
 
 export const STEPS: StepDef[] = [
   { title: "Data", subtitle: "Sources, dataset version" },
@@ -100,6 +100,7 @@ export default function ProjectStudio({
 }) {
   const [phase, setPhase] = useState<1 | 2>(1);
   const [step, setStep] = useState(0);
+  const [p2Section, setP2Section] = useState<P2Section>("performance");
   const [error, setError] = useState<string | null>(null);
 
   const [sources, setSources] = useState<DataSource[]>([]);
@@ -176,7 +177,30 @@ export default function ProjectStudio({
         ) : (
           <aside className="rail">
             <div className="rail-h">Marketing performance</div>
-            <p style={{ padding: "0 16px", fontSize: 12, color: "var(--ink-3)" }}>
+            <div className="pipe">
+              {(
+                [
+                  { key: "performance", title: "Performance", subtitle: "Portfolio, drivers, tracking, reports" },
+                  { key: "optimization", title: "Optimization dashboard", subtitle: "Scenario planning" },
+                  { key: "ai", title: "AI Agent", subtitle: "Ask about this project" },
+                ] as { key: P2Section; title: string; subtitle: string }[]
+              ).map((s) => (
+                <button
+                  key={s.key}
+                  className="step"
+                  data-state={p2Section === s.key ? "active" : "idle"}
+                  aria-current={p2Section === s.key}
+                  onClick={() => setP2Section(s.key)}
+                >
+                  <span className="dot">●</span>
+                  <span>
+                    <span className="step-t">{s.title}</span>
+                    <span className="step-s">{s.subtitle}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="muted" style={{ padding: "12px 16px", fontSize: 11.5 }}>
               Reads from champion run {champion?.id.slice(0, 8)}.
             </p>
           </aside>
@@ -244,6 +268,7 @@ export default function ProjectStudio({
               )}
               {step === 5 && (
                 <PublishStep
+                  project={project}
                   runs={runs}
                   workbookGenerated={workbookGenerated}
                   setError={setError}
@@ -266,6 +291,7 @@ export default function ProjectStudio({
                 scenarios={scenarios}
                 reload={loadAll}
                 setError={setError}
+                section={p2Section}
               />
             ) : (
               <div className="locked">
@@ -364,9 +390,28 @@ function DataStep({
   const [controls, setControls] = useState("price_index, seasonality");
   const [showAddSource, setShowAddSource] = useState(false);
 
-  async function addSource(name: string, sourceType: string) {
+  const [mode, setMode] = useState<"manual" | "file">("manual");
+  const uploadedSources = sources.filter((s) => (s.columns_preview?.columns?.length ?? 0) > 0);
+  const [fileSourceId, setFileSourceId] = useState("");
+  const [outcomeCol, setOutcomeCol] = useState("");
+  const [channelCols, setChannelCols] = useState<Set<string>>(new Set());
+  const [controlCols, setControlCols] = useState<Set<string>>(new Set());
+
+  const fileSource = uploadedSources.find((s) => s.id === fileSourceId);
+  const fileColumns = fileSource?.columns_preview?.columns ?? [];
+
+  function toggleSet(set: Set<string>, setSet: (s: Set<string>) => void, col: string) {
+    const next = new Set(set);
+    next.has(col) ? next.delete(col) : next.add(col);
+    setSet(next);
+  }
+
+  async function addSource(name: string, sourceType: string, file?: File | null) {
     try {
-      await api.createDataSource(project.id, name, sourceType);
+      const ds = await api.createDataSource(project.id, name, sourceType);
+      if (file) {
+        await api.uploadDataSourceFile(ds.id, file);
+      }
       reload();
     } catch (err: any) {
       setError(err.message);
@@ -375,6 +420,26 @@ function DataStep({
   }
 
   async function issueDatasetVersion() {
+    if (mode === "file") {
+      if (!fileSourceId || !outcomeCol || channelCols.size === 0) {
+        setError("Pick a source, an outcome column, and at least one channel column");
+        return;
+      }
+      try {
+        await api.createDatasetVersion(
+          project.id,
+          label,
+          Array.from(channelCols).map((name) => ({ name, min: 0, max: 10 })),
+          Array.from(controlCols),
+          fileSourceId,
+          outcomeCol
+        );
+        reload();
+      } catch (err: any) {
+        setError(err.message);
+      }
+      return;
+    }
     const cleanChannels = channels.filter((c) => c.name.trim());
     if (!cleanChannels.length) {
       setError("Add at least one channel before issuing a dataset version");
@@ -419,6 +484,7 @@ function DataStep({
                 <tr>
                   <th>Name</th>
                   <th>Type</th>
+                  <th>File</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -429,14 +495,28 @@ function DataStep({
                       <b>{s.name}</b>
                     </td>
                     <td className="muted">{s.source_type}</td>
+                    <td className="muted">
+                      {s.filename ? (
+                        <>
+                          {s.filename}
+                          {s.row_count != null && s.column_count != null && (
+                            <span> · {s.row_count} rows × {s.column_count} cols</span>
+                          )}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td>
-                      <span className="tag ok">{s.status}</span>
+                      <span className={"tag " + (s.status === "valid" ? "ok" : s.status === "warn" ? "warn" : "idle")}>
+                        {s.status}
+                      </span>
                     </td>
                   </tr>
                 ))}
                 {sources.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="muted">
+                    <td colSpan={4} className="muted">
                       No sources connected yet.
                     </td>
                   </tr>
@@ -501,7 +581,101 @@ function DataStep({
               <label>Label</label>
               <input value={label} onChange={(e) => setLabel(e.target.value)} />
             </div>
-            <ChannelBuilder channels={channels} setChannels={setChannels} controls={controls} setControls={setControls} />
+
+            <div className="chips" style={{ marginBottom: 12 }}>
+              <button className="chip" aria-pressed={mode === "manual"} onClick={() => setMode("manual")}>
+                Manual (synthetic fit)
+              </button>
+              <button className="chip" aria-pressed={mode === "file"} onClick={() => setMode("file")} disabled={uploadedSources.length === 0}>
+                From uploaded file{uploadedSources.length === 0 ? " (upload a source first)" : ""}
+              </button>
+            </div>
+
+            {mode === "manual" ? (
+              <ChannelBuilder channels={channels} setChannels={setChannels} controls={controls} setControls={setControls} />
+            ) : (
+              <div>
+                <div className="field">
+                  <label>File source</label>
+                  <select
+                    value={fileSourceId}
+                    onChange={(e) => {
+                      setFileSourceId(e.target.value);
+                      setOutcomeCol("");
+                      setChannelCols(new Set());
+                      setControlCols(new Set());
+                    }}
+                  >
+                    <option value="">Select…</option>
+                    {uploadedSources.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.filename})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {fileSource && (
+                  <>
+                    <div className="field">
+                      <label>Outcome column</label>
+                      <select value={outcomeCol} onChange={(e) => setOutcomeCol(e.target.value)}>
+                        <option value="">Select…</option>
+                        {fileColumns.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="field">
+                      <label>Channel columns (media spend)</label>
+                      <div className="chips">
+                        {fileColumns
+                          .filter((c) => c !== outcomeCol)
+                          .map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className="chip"
+                              aria-pressed={channelCols.has(c)}
+                              disabled={controlCols.has(c)}
+                              onClick={() => toggleSet(channelCols, setChannelCols, c)}
+                            >
+                              {c}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+
+                    <div className="field">
+                      <label>Control columns (optional)</label>
+                      <div className="chips">
+                        {fileColumns
+                          .filter((c) => c !== outcomeCol && !channelCols.has(c))
+                          .map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className="chip"
+                              aria-pressed={controlCols.has(c)}
+                              onClick={() => toggleSet(controlCols, setControlCols, c)}
+                            >
+                              {c}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                    <p className="hint">
+                      The fit uses these columns' real values directly — adstock decay is fixed at 0.5 (the true
+                      decay isn't known for real data the way it is for the synthetic demo path).
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
             <button className="btn pri" style={{ marginTop: 10 }} onClick={issueDatasetVersion}>
               Issue dataset version
             </button>
@@ -899,21 +1073,28 @@ function WorkbookStep({
         <button className="btn" onClick={onBack}>
           Back to runs
         </button>
-        <button className="btn pri" onClick={onContinue}>
+        <button className="btn pri" disabled={!generated} onClick={onContinue}>
           Continue to publish â†’
         </button>
       </div>
+      {!generated && (
+        <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+          Generate a workbook above to unlock Publish.
+        </p>
+      )}
     </section>
   );
 }
 
 function PublishStep({
+  project,
   runs,
   workbookGenerated,
   setError,
   onBack,
   onPublished,
 }: {
+  project: Project;
   runs: ModelRun[];
   workbookGenerated: boolean;
   setError: (e: string | null) => void;
@@ -922,6 +1103,9 @@ function PublishStep({
 }) {
   const candidate = runs.find((r) => r.status === "completed" && !r.is_champion) ?? runs.find((r) => r.status === "completed");
   const [busy, setBusy] = useState(false);
+  const [proj, setProj] = useState(project);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function publish() {
     if (!candidate) return;
@@ -933,6 +1117,44 @@ function PublishStep({
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  const champion = runs.some((r) => r.is_champion);
+  const shareUrl = proj.share_token ? `${window.location.origin}${window.location.pathname}?share=${proj.share_token}` : null;
+
+  async function share() {
+    setShareBusy(true);
+    try {
+      const updated = await api.shareProject(project.id);
+      setProj(updated);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function unshare() {
+    setShareBusy(true);
+    try {
+      const updated = await api.unshareProject(project.id);
+      setProj(updated);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function copyLink() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard permission denied -- the URL is still shown in the input, selectable by hand
     }
   }
 
@@ -981,6 +1203,40 @@ function PublishStep({
             <button className="btn pri" disabled={!ready || busy} onClick={publish}>
               {busy ? "Publishingâ€¦" : "Publish as champion"}
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="card-h">
+          <h3>Share with client</h3>
+          <span className={"tag " + (proj.is_shared ? "ok" : "warn")}>{proj.is_shared ? "Shared" : "Not shared"}</span>
+        </div>
+        <div className="card-b">
+          <p className="muted" style={{ marginBottom: 10 }}>
+            A share link gives the client a login-gated view of Marketing performance for this project only â€” no Model
+            studio, no other projects. Grant the client's users access with the <b>client_viewer</b> role, scoped to this
+            project, from Admin â†’ Access levels.
+          </p>
+          {!champion && <p className="muted">Publish a champion above before sharing â€” the client would otherwise see a sealed report.</p>}
+          {shareUrl && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input readOnly value={shareUrl} style={{ flex: 1, padding: "6px 9px", border: "1px solid var(--line-hard)", borderRadius: 3 }} />
+              <button className="btn sm" onClick={copyLink}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            {!proj.is_shared ? (
+              <button className="btn pri" disabled={shareBusy} onClick={share}>
+                {shareBusy ? "Generatingâ€¦" : "Generate share link"}
+              </button>
+            ) : (
+              <button className="btn" disabled={shareBusy} onClick={unshare}>
+                {shareBusy ? "Revokingâ€¦" : "Revoke share link"}
+              </button>
+            )}
           </div>
         </div>
       </div>

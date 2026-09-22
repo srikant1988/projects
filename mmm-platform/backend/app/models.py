@@ -27,6 +27,8 @@ class Client(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    country: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="clients")
@@ -40,6 +42,8 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     outcome_variable: Mapped[str] = mapped_column(String(200), default="")
     time_grain: Mapped[str] = mapped_column(String(50), default="weekly")
+    is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     client: Mapped["Client"] = relationship(back_populates="projects")
@@ -52,6 +56,11 @@ class DataSource(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     source_type: Mapped[str] = mapped_column(String(50), nullable=False)  # excel | database | lake
     status: Mapped[str] = mapped_column(String(30), default="pending")  # pending | valid | warn
+    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    column_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    columns_preview: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"columns": [...]} -- first row's headers
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"columns": [...], "rows": [[...], ...]} -- full parsed values
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -67,6 +76,7 @@ class DatasetVersion(Base):
     control_count: Mapped[int] = mapped_column(Integer, default=0)
     quality_report: Mapped[dict] = mapped_column(JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(30), default="validated")  # validated | failed
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"outcome": [...], "channels": {name: [...]}, "controls": {name: [...]}}
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

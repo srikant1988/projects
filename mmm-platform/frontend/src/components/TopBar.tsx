@@ -7,6 +7,7 @@ export default function TopBar({
   avatarInitials,
   onLogout,
   onWordmarkClick,
+  onAdmin,
 }: {
   crumbClient?: string;
   crumbProject?: string;
@@ -16,6 +17,7 @@ export default function TopBar({
   avatarInitials: string;
   onLogout: () => void;
   onWordmarkClick?: () => void;
+  onAdmin?: () => void;
 }) {
   return (
     <div className="top">
@@ -46,6 +48,11 @@ export default function TopBar({
         </div>
       )}
       <div style={{ marginLeft: phase === undefined ? "auto" : 0, display: "flex", alignItems: "center", gap: 10 }}>
+        {onAdmin && (
+          <button className="btn sm" onClick={onAdmin}>
+            Admin
+          </button>
+        )}
         <button className="btn sm" onClick={onLogout}>
           Sign out
         </button>

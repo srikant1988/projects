@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { api, Client, Me, Membership, ModelRun, ModelSpec, Project } from "../api";
 import ProjectStudio, { STEPS } from "./ProjectStudio";
+import Admin from "./Admin";
 import TopBar from "../components/TopBar";
 import PipelineRail from "../components/PipelineRail";
 
@@ -31,8 +32,8 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [openProject, setOpenProject] = useState<Project | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [newClientName, setNewClientName] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectClientId, setNewProjectClientId] = useState("");
 
@@ -81,11 +82,10 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
     }
   }
 
-  async function addClient() {
-    if (!me || !newClientName.trim()) return;
+  async function addClient(name: string, country: string | null, logoUrl: string | null) {
+    if (!me) return;
     try {
-      const c = await api.createClient(me.org_id, newClientName.trim());
-      setNewClientName("");
+      const c = await api.createClient(me.org_id, name, country, logoUrl);
       setNewProjectClientId(c.id);
       await loadAll();
     } catch (err: any) {
@@ -94,6 +94,17 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
   }
 
   const avatarInitials = me ? initials(me.display_name || me.email) : "?";
+
+  if (showAdmin && me) {
+    return (
+      <Admin
+        orgId={me.org_id}
+        avatarInitials={avatarInitials}
+        onBack={() => setShowAdmin(false)}
+        onLogout={onLogout}
+      />
+    );
+  }
 
   if (openProject) {
     const client = clients.find((c) => c.id === openProject.client_id);
@@ -114,6 +125,7 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
   const f = search.toLowerCase();
   const visibleProjects = projects.filter((p) => !f || p.name.toLowerCase().includes(f));
   const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
+  const clientOf = (id: string) => clients.find((c) => c.id === id);
   const projectRuns = (id: string) => runs.filter((r) => r.project_id === id).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const projectChampion = (id: string) => projectRuns(id).find((r) => r.is_champion);
   const specVersion = (specId: string) => specs.find((s) => s.id === specId)?.version;
@@ -131,7 +143,7 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div>
-      <TopBar avatarInitials={avatarInitials} onLogout={onLogout} />
+      <TopBar avatarInitials={avatarInitials} onLogout={onLogout} onAdmin={() => setShowAdmin(true)} />
 
       <div className="shell">
         <PipelineRail
@@ -186,20 +198,9 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
                   <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} />
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 4 }}>
-                <div className="field" style={{ flex: 1, marginBottom: 0 }}>
-                  <label>Or create a new client</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input
-                      placeholder="New client name"
-                      value={newClientName}
-                      onChange={(e) => setNewClientName(e.target.value)}
-                    />
-                    <button className="btn sm" onClick={addClient}>
-                      Add client
-                    </button>
-                  </div>
-                </div>
+              <div style={{ marginTop: 4 }}>
+                <label>Or create a new client</label>
+                <AddClientBox onAdd={addClient} setError={setError} />
               </div>
               <button className="btn pri" style={{ marginTop: 12 }} onClick={createProject}>
                 Create project
@@ -250,7 +251,24 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
                             {p.name}
                           </button>
                         </td>
-                        <td className="muted">{clientName(p.client_id)}</td>
+                        <td className="muted">
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {clientOf(p.client_id)?.logo_url && (
+                              <img
+                                src={clientOf(p.client_id)!.logo_url!}
+                                alt=""
+                                width={16}
+                                height={16}
+                                style={{ borderRadius: 2, objectFit: "contain" }}
+                                onError={(e) => (e.currentTarget.style.display = "none")}
+                              />
+                            )}
+                            {clientName(p.client_id)}
+                            {clientOf(p.client_id)?.country && (
+                              <span style={{ fontSize: 10.5, color: "var(--ink-3)" }}>· {clientOf(p.client_id)!.country}</span>
+                            )}
+                          </span>
+                        </td>
                         <td className="muted">{p.time_grain}</td>
                         <td>
                           {champ ? (
@@ -357,6 +375,104 @@ export default function Workspace({ onLogout }: { onLogout: () => void }) {
         </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+/** Search-then-preview client creation: typing a name and clicking Search
+ * hits GET /v1/clients/lookup (Clearbit domain/logo + a Wikipedia/Wikidata
+ * country guess). Nothing from that lookup is trusted blindly -- name,
+ * country, and whether to keep the logo are all still editable/removable
+ * before "Add client" actually creates anything. */
+function AddClientBox({
+  onAdd,
+  setError,
+}: {
+  onAdd: (name: string, country: string | null, logoUrl: string | null) => Promise<void>;
+  setError: (e: string | null) => void;
+}) {
+  const [name, setName] = useState("");
+  const [country, setCountry] = useState("");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  async function search() {
+    if (!name.trim()) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const result = await api.lookupClient(name.trim());
+      setName(result.name);
+      setCountry(result.country ?? "");
+      setLogoUrl(result.logo_url);
+      setSearched(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function add() {
+    if (!name.trim()) {
+      setError("Enter a client name");
+      return;
+    }
+    setAdding(true);
+    setError(null);
+    try {
+      await onAdd(name.trim(), country.trim() || null, logoUrl);
+      setName("");
+      setCountry("");
+      setLogoUrl(null);
+      setSearched(false);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {logoUrl && (
+          <img
+            src={logoUrl}
+            alt=""
+            width={34}
+            height={34}
+            style={{ borderRadius: 3, objectFit: "contain", border: "1px solid var(--line-hard)", flex: "none" }}
+            onError={() => setLogoUrl(null)}
+          />
+        )}
+        <input
+          placeholder="Client name"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setSearched(false);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), search())}
+          style={{ flex: 1 }}
+        />
+        <button className="btn sm" disabled={searching || !name.trim()} onClick={search}>
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </div>
+
+      {searched && (
+        <div className="field" style={{ marginTop: 8 }}>
+          <label>
+            Country <span className="muted">(suggested — verify before saving)</span>
+          </label>
+          <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="e.g. United States" />
+        </div>
+      )}
+
+      <button className="btn sm pri" style={{ marginTop: 8 }} disabled={adding || !name.trim()} onClick={add}>
+        {adding ? "Adding…" : "Add client"}
+      </button>
     </div>
   );
 }

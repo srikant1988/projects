@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import engine as fitting_engine
 from app.database import get_session
 from app.deps import get_current_user
-from app.models import ModelRun, ModelSpec, User
+from app.models import DatasetVersion, ModelRun, ModelSpec, User
 from app.schemas import ModelRunCreate, ModelRunOut
 
 router = APIRouter(prefix="/v1", tags=["model-runs"])
@@ -58,11 +58,15 @@ async def create_run(
     except DBAPIError:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not permitted to run this spec")
 
+    dv_result = await db.execute(select(DatasetVersion).where(DatasetVersion.id == body.dataset_version_id))
+    dv = dv_result.scalar_one_or_none()
+    real_data = dv.data if dv and dv.data else None
+
     # Synchronous fit -- the ridge/quick-fit engine is seconds, not the
     # 10-90 minutes a real Bayesian job would take (doc section 6.1), so
     # there's no queue/worker split needed yet.
     try:
-        result = fitting_engine.fit(spec.spec, str(run.dataset_version_id))
+        result = fitting_engine.fit(spec.spec, str(run.dataset_version_id), real_data=real_data)
     except ValueError as exc:
         run.status = "failed"
         run.diagnostics = {"error": str(exc)}

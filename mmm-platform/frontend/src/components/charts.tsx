@@ -68,6 +68,43 @@ export function BarChart({
   );
 }
 
+const SERIES_COLORS = [
+  "var(--accent)", "var(--accent-mid)", "#8ecae6", "#e0a458", "#6fb98f", "#c77dff",
+  "#f4a261", "#457b9d", "#e76f51", "#2a9d8f", "#9c6644", "#588157",
+];
+export function seriesColor(i: number) {
+  return SERIES_COLORS[i % SERIES_COLORS.length];
+}
+
+/** A single horizontal stacked bar -- one segment per channel, proportional
+ * to spend. Matches the "Result charts" stacked-bar-by-scenario view. */
+export function StackedBar({
+  segments,
+  height = 46,
+}: {
+  segments: { label: string; value: number }[];
+  height?: number;
+}) {
+  const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+  return (
+    <div>
+      <div style={{ display: "flex", width: "100%", height, borderRadius: "var(--r)", overflow: "hidden" }}>
+        {segments.map((s, i) => (
+          <div
+            key={s.label}
+            title={`${s.label}: ${s.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+            style={{ width: `${(s.value / total) * 100}%`, background: seriesColor(i), minWidth: s.value > 0 ? 2 : 0 }}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 10.5, color: "var(--ink-3)" }}>
+        <span>$0</span>
+        <span>{total.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+      </div>
+    </div>
+  );
+}
+
 export function CurveChart({
   points,
   currentSpend,

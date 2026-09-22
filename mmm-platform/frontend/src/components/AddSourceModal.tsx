@@ -15,20 +15,41 @@ export default function AddSourceModal({
   onConnect,
 }: {
   onClose: () => void;
-  onConnect: (name: string, sourceType: string) => Promise<void>;
+  onConnect: (name: string, sourceType: string, file?: File | null) => Promise<void>;
 }) {
   const [picked, setPicked] = useState<SourceType | null>(null);
   const [alias, setAlias] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const option = OPTIONS.find((o) => o.type === picked);
 
+  function pickFile(f: File | null | undefined) {
+    if (!f) return;
+    if (!/\.(xlsx|csv)$/i.test(f.name)) {
+      setErr("Only .xlsx or .csv files are supported");
+      return;
+    }
+    setErr(null);
+    setFile(f);
+    if (!alias.trim()) setAlias(f.name.replace(/\.(xlsx|csv)$/i, ""));
+  }
+
   async function connect() {
     if (!picked) return;
+    if (picked === "excel" && !file) {
+      setErr("Choose a file to upload");
+      return;
+    }
     setBusy(true);
+    setErr(null);
     try {
-      await onConnect(alias.trim() || `New ${option?.title} source`, TYPE_LABEL[picked]);
+      await onConnect(alias.trim() || `New ${option?.title} source`, TYPE_LABEL[picked], file);
       onClose();
+    } catch (e: any) {
+      setErr(e.message ?? "Failed to connect this source");
     } finally {
       setBusy(false);
     }
@@ -111,20 +132,42 @@ export default function AddSourceModal({
 
               {option.type === "excel" && (
                 <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    pickFile(e.dataTransfer.files?.[0]);
+                  }}
                   style={{
-                    border: "1.5px dashed var(--line-hard)",
+                    border: "1.5px dashed " + (dragOver ? "var(--accent)" : "var(--line-hard)"),
                     borderRadius: "var(--r)",
                     padding: 20,
                     textAlign: "center",
-                    background: "var(--sunken)",
+                    background: dragOver ? "var(--accent-dim)" : "var(--sunken)",
                   }}
                 >
-                  <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-                    Drop a .xlsx or .csv here, or
-                  </p>
-                  <button className="btn sm" type="button">
-                    Choose file…
-                  </button>
+                  {file ? (
+                    <p style={{ fontSize: 12.5, marginBottom: 10 }}>
+                      📄 <b>{file.name}</b> ({(file.size / 1024).toFixed(0)} KB)
+                    </p>
+                  ) : (
+                    <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                      Drop a .xlsx or .csv here, or
+                    </p>
+                  )}
+                  <label className="btn sm" style={{ cursor: "pointer", display: "inline-block" }}>
+                    {file ? "Choose a different file…" : "Choose file…"}
+                    <input
+                      type="file"
+                      accept=".xlsx,.csv"
+                      onChange={(e) => pickFile(e.target.files?.[0])}
+                      style={{ display: "none" }}
+                    />
+                  </label>
                 </div>
               )}
 
@@ -177,14 +220,15 @@ export default function AddSourceModal({
               )}
             </div>
           )}
+          {err && <div className="error" style={{ marginTop: 12 }}>{err}</div>}
         </div>
         <div className="card-h" style={{ borderTop: "1px solid var(--line)", justifyContent: "flex-end", gap: 8 }}>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
           {option && (
-            <button className="btn pri" disabled={busy} onClick={connect}>
-              {busy ? "Connecting…" : "Connect source"}
+            <button className="btn pri" disabled={busy || (option.type === "excel" && !file)} onClick={connect}>
+              {busy ? (option.type === "excel" ? "Uploading…" : "Connecting…") : "Connect source"}
             </button>
           )}
         </div>

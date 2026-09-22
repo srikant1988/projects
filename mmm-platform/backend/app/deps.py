@@ -6,8 +6,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models import User
+from app.models import Membership, User
 from app.security import decode_access_token
+
+ADMIN_ROLES = ("super_admin", "org_admin")
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -36,4 +38,25 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    return user
+
+
+async def require_org_admin(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    """User and access-level management is org_admin/super_admin only.
+    Deliberately checked in application code, not RLS: the users/memberships
+    tables carry no RLS policies (see 0001_init.py), so this is the only
+    enforcement point for who may manage accounts."""
+    result = await db.execute(
+        select(Membership).where(
+            Membership.user_id == user.id,
+            Membership.scope_type == "organization",
+            Membership.scope_id == user.org_id,
+            Membership.role.in_(ADMIN_ROLES),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Requires org_admin or super_admin")
     return user

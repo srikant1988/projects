@@ -7,11 +7,13 @@ from app.routers import (
     data_sources,
     dataset_versions,
     me,
+    memberships,
     model_runs,
     model_specs,
     orgs,
     projects,
     scenarios,
+    users,
 )
 
 app = FastAPI(title="MMM Platform API", version="0.1.0")
@@ -34,6 +36,8 @@ app.include_router(dataset_versions.router)
 app.include_router(model_specs.router)
 app.include_router(model_runs.router)
 app.include_router(scenarios.router)
+app.include_router(users.router)
+app.include_router(memberships.router)
 
 
 @app.get("/health")

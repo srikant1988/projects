@@ -47,61 +47,98 @@ def _ridge_fit(X: np.ndarray, y: np.ndarray, alpha: float = 1.0):
     return coef, intercept
 
 
-def fit(spec: dict, dataset_version_id: str) -> dict:
+def fit(spec: dict, dataset_version_id: str, real_data: dict | None = None) -> dict:
     channels = spec.get("channels", [])
     controls = spec.get("controls", [])
     if not channels:
         raise ValueError("spec must declare at least one channel")
 
-    rng = _rng_for(dataset_version_id + str(spec))
-    t = np.arange(N_WEEKS)
-    trend = 100 + 0.15 * t
-    seasonality = 8 * np.sin(2 * np.pi * t / 52)
-
     channel_names = [c["name"] for c in channels]
-    true_decay = {c["name"]: rng.uniform(0.25, 0.65) for c in channels}
-    true_k = {}
-    true_coef = {c["name"]: rng.uniform(1.5, 4.5) for c in channels}
-    raw_spend = {}
-    transformed = {}
 
-    outcome = trend + seasonality
-    for c in channels:
-        name = c["name"]
-        lo, hi = float(c.get("min", 0)), float(c.get("max", 10))
-        hi = max(hi, lo + 0.1)
-        spend = rng.uniform(lo, hi, size=N_WEEKS) * (1 + 0.3 * np.sin(2 * np.pi * t / 52 + rng.uniform(0, 6)))
-        spend = np.clip(spend, 0, None)
-        raw_spend[name] = spend
-        adstocked = _adstock(spend, true_decay[name])
-        k = float(np.median(adstocked)) + 1e-6
-        true_k[name] = k
-        sat = _saturate(adstocked, k)
-        transformed[name] = sat
-        outcome = outcome + true_coef[name] * sat * 20
+    if real_data:
+        missing = [n for n in channel_names if n not in real_data.get("channels", {})] + [
+            c for c in controls if c not in real_data.get("controls", {})
+        ]
+        if missing:
+            raise ValueError(
+                f"This dataset version's real data doesn't cover spec column(s): {', '.join(missing)} "
+                "-- the model spec's channels/controls must match what the dataset version was issued from"
+            )
+        # Real ingested panel (see dataset_versions.py) -- fixed adstock decay
+        # since the true decay isn't known the way it is for the synthetic
+        # ground-truth path below; k (half-saturation) is still estimated
+        # from the data itself, same as the synthetic path.
+        n = len(real_data["outcome"])
+        t = np.arange(n)
+        raw_spend = {name: np.array(real_data["channels"][name], dtype=float) for name in channel_names}
+        transformed = {}
+        true_decay = {}
+        true_k = {}
+        for name in channel_names:
+            decay = 0.5
+            true_decay[name] = decay
+            adstocked = _adstock(raw_spend[name], decay)
+            k = float(np.median(adstocked)) + 1e-6
+            true_k[name] = k
+            transformed[name] = _saturate(adstocked, k)
 
-    control_series = {}
-    for ctrl in controls:
-        series = rng.normal(0, 1, size=N_WEEKS)
-        control_series[ctrl] = series
-        outcome = outcome + rng.uniform(-3, 3) * series
+        control_series = {}
+        for ctrl in controls:
+            raw = np.array(real_data["controls"][ctrl], dtype=float)
+            control_series[ctrl] = (raw - raw.mean()) / (raw.std() + 1e-9)
 
-    noise = rng.normal(0, outcome.std() * 0.04, size=N_WEEKS)
-    outcome = outcome + noise
+        outcome = np.array(real_data["outcome"], dtype=float)
+    else:
+        n = N_WEEKS
+        rng = _rng_for(dataset_version_id + str(spec))
+        t = np.arange(n)
+        trend = 100 + 0.15 * t
+        seasonality = 8 * np.sin(2 * np.pi * t / 52)
+
+        true_decay = {c["name"]: rng.uniform(0.25, 0.65) for c in channels}
+        true_k = {}
+        true_coef = {c["name"]: rng.uniform(1.5, 4.5) for c in channels}
+        raw_spend = {}
+        transformed = {}
+
+        outcome = trend + seasonality
+        for c in channels:
+            name = c["name"]
+            lo, hi = float(c.get("min", 0)), float(c.get("max", 10))
+            hi = max(hi, lo + 0.1)
+            spend = rng.uniform(lo, hi, size=n) * (1 + 0.3 * np.sin(2 * np.pi * t / 52 + rng.uniform(0, 6)))
+            spend = np.clip(spend, 0, None)
+            raw_spend[name] = spend
+            adstocked = _adstock(spend, true_decay[name])
+            k = float(np.median(adstocked)) + 1e-6
+            true_k[name] = k
+            sat = _saturate(adstocked, k)
+            transformed[name] = sat
+            outcome = outcome + true_coef[name] * sat * 20
+
+        control_series = {}
+        for ctrl in controls:
+            series = rng.normal(0, 1, size=n)
+            control_series[ctrl] = series
+            outcome = outcome + rng.uniform(-3, 3) * series
+
+        noise = rng.normal(0, outcome.std() * 0.04, size=n)
+        outcome = outcome + noise
 
     # Trend and seasonality are base drivers every real MMM spec includes
     # (doc section 5.2/6.2 -- "Seasonality -- Fourier" is checked by default
     # in the reference spec), not something an analyst opts into per project.
-    base_features = [t / N_WEEKS, np.sin(2 * np.pi * t / 52), np.cos(2 * np.pi * t / 52)]
+    base_features = [t / n, np.sin(2 * np.pi * t / 52), np.cos(2 * np.pi * t / 52)]
 
     feature_cols = channel_names + controls
     X = np.column_stack(
-        [transformed[n] for n in channel_names] + [control_series[c] for c in controls] + base_features
+        [transformed[n_] for n_ in channel_names] + [control_series[c] for c in controls] + base_features
     )
     y = outcome
 
-    train_idx = slice(0, N_WEEKS - HOLDOUT_WEEKS)
-    holdout_idx = slice(N_WEEKS - HOLDOUT_WEEKS, N_WEEKS)
+    holdout_weeks = min(HOLDOUT_WEEKS, n // 5) if real_data else HOLDOUT_WEEKS
+    train_idx = slice(0, n - holdout_weeks)
+    holdout_idx = slice(n - holdout_weeks, n)
 
     coef, intercept = _ridge_fit(X[train_idx], y[train_idx], alpha=1.0)
 
@@ -136,9 +173,9 @@ def fit(spec: dict, dataset_version_id: str) -> dict:
             "status": "pass" if not negative_contribs else "warn",
         },
         "sufficiency": {
-            "weeks": N_WEEKS,
+            "weeks": n,
             "parameters": len(feature_cols) + 1,
-            "status": "pass" if N_WEEKS > 4 * (len(feature_cols) + 1) else "warn",
+            "status": "pass" if n > 4 * (len(feature_cols) + 1) else "warn",
         },
     }
     overall_status = "completed" if all(d["status"] == "pass" for d in diagnostics.values()) else "failed_diagnostics"
